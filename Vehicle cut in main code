@@ -1,0 +1,203 @@
+import cv2
+from ultralytics import YOLO
+import cvzone
+import os
+
+# Load YOLO model
+model = YOLO("yolov8l.pt")
+
+# Define class names for COCO dataset
+cocoClassNames = [
+    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train',
+    'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter',
+    'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear',
+    'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase',
+    'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
+    'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle',
+    'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut',
+    'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet',
+    'TV', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+    'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase',
+    'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+]
+
+# Filtered class names and corresponding colors for vehicle classes only
+vehicleClasses = ['bicycle', 'car', 'motorcycle', 'bus', 'truck']
+classColors = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (255, 255, 0), (0, 255, 255)]
+
+# Known width of an object in meters (e.g., width of a car)
+known_object_width_meters = 1.8  # Adjust as needed
+
+def calculate_distance(known_width_meters, focal_length_pixels, perceived_width_pixels):
+    # Calculate distance using focal length and known object width
+    distance_meters = (known_width_meters * focal_length_pixels) / perceived_width_pixels
+    return distance_meters
+
+# Focal length of the camera (estimated based on camera specifications or calibrated)
+focal_length_pixels = 480.0  # Example focal length in pixels
+
+# Distance threshold for collision warning (in meters)
+collision_warning_threshold = 2.5  # Adjust as needed
+
+# Placeholder function to calculate Time-to-Collision (TTC)
+def calculate_ttc(distance, relative_speed):
+    if relative_speed > 0:
+        return distance / relative_speed
+    else:
+        return float('inf')  # TTC is infinite if there is no relative speed
+
+def process_video(video_path):
+    # Process video
+    cap = cv2.VideoCapture(video_path)
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Perform object detection on the frame
+        results = model(frame, stream=True)
+
+        # Process each detected object
+        for r in results:
+            boxes = r.boxes
+            for box in boxes:
+                # Extract bounding box coordinates
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                w, h = x2 - x1, y2 - y1
+
+                # Extract confidence score and class index
+                conf = round(box.conf[0].item(), 2)
+                cls = int(box.cls[0].item())
+
+                # Filter only for vehicle classes and confidence above 0.3
+                if cocoClassNames[cls] in vehicleClasses and conf > 0.3:
+                    # Calculate perceived width of the detected object
+                    perceived_width_pixels = abs(x2 - x1)
+
+                    # Calculate real-world distance to the object
+                    if perceived_width_pixels > 0:
+                        distance_meters = calculate_distance(known_object_width_meters, focal_length_pixels,
+                                                             perceived_width_pixels)
+                        print(f"Distance to {cocoClassNames[cls]}: {distance_meters:.2f} meters")
+
+                        # Placeholder for relative speed (in meters per second)
+                        relative_speed = 10.0  # Adjust with actual relative speed
+
+                        # Calculate TTC
+                        ttc = calculate_ttc(distance_meters, relative_speed)
+
+                        # Determine color based on distance
+                        if distance_meters < collision_warning_threshold:
+                            myColor = (0, 0, 255)  # Red for collision warning
+                            collision_risk = "High Collision Risk!"
+                        else:
+                            color_index = vehicleClasses.index(cocoClassNames[cls])
+                            myColor = classColors[color_index]
+                            collision_risk = "Low Collision Risk"
+
+                        # Draw rectangle and annotate for all detected vehicles
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), myColor, 3)
+                        cvzone.putTextRect(frame, f'{cocoClassNames[cls]} {conf}', (max(0, x1), max(35, y1)),
+                                           scale=1, thickness=1, colorB=myColor, colorT=(255, 255, 255), colorR=myColor,
+                                           offset=5)
+                        # Add distance, TTC, and collision risk annotations
+                        cv2.putText(frame, f'Distance: {distance_meters:.2f} meters', (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, myColor, 2)
+                        cv2.putText(frame, f'TTC: {ttc:.2f} seconds', (x1, y1 - 30),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, myColor, 2)
+                        cv2.putText(frame, f'Collision Risk: {collision_risk}', (x1, y1 - 50),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, myColor, 2)
+
+        # Display annotated frame
+        cv2.imshow('Video', frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    # Release resources
+    cap.release()
+    cv2.destroyAllWindows()
+
+def process_images(image_directory):
+    # Process images from directory
+    image_files = [os.path.join(image_directory, f) for f in os.listdir(image_directory) if
+                   f.endswith(('.png', '.jpg', '.jpeg'))]
+
+    for image_file in image_files:
+        img = cv2.imread(image_file)
+
+        # Perform object detection
+        results = model(img, stream=True)
+
+        # Process each detected object
+        for r in results:
+            boxes = r.boxes
+            for box in boxes:
+                # Extract bounding box coordinates
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                w, h = x2 - x1, y2 - y1
+
+                # Extract confidence score and class index
+                conf = round(box.conf[0].item(), 2)
+                cls = int(box.cls[0].item())
+
+                # Filter only for vehicle classes and confidence above 0.3
+                if cocoClassNames[cls] in vehicleClasses and conf > 0.3:
+                    # Calculate perceived width of the detected object
+                    perceived_width_pixels = abs(x2 - x1)
+
+                    # Calculate real-world distance to the object
+                    if perceived_width_pixels > 0:
+                        distance_meters = calculate_distance(known_object_width_meters, focal_length_pixels,
+                                                             perceived_width_pixels)
+                        print(f"Distance to {cocoClassNames[cls]}: {distance_meters:.2f} meters")
+
+                        # Placeholder for relative speed (in meters per second)
+                        relative_speed = 10.0  # Adjust with actual relative speed
+
+                        # Calculate TTC
+                        ttc = calculate_ttc(distance_meters, relative_speed)
+
+                        # Determine color based on distance
+                        if distance_meters < collision_warning_threshold:
+                            myColor = (0, 0, 255)  # Red for collision warning
+                            collision_risk = "High Collision Risk!"
+                        else:
+                            color_index = vehicleClasses.index(cocoClassNames[cls])
+                            myColor = classColors[color_index]
+                            collision_risk = "Low Collision Risk"
+
+                        # Draw rectangle and annotate for all detected vehicles
+                        cv2.rectangle(img, (x1, y1), (x2, y2), myColor, 3)
+                        cvzone.putTextRect(img, f'{cocoClassNames[cls]} {conf}', (max(0, x1), max(35, y1)),
+                                           scale=1, thickness=1, colorB=myColor, colorT=(255, 255, 255), colorR=myColor,
+                                           offset=5)
+                        # Add distance, TTC, and collision risk annotations
+                        cv2.putText(img, f'Distance: {distance_meters:.2f} meters', (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, myColor, 2)
+                        cv2.putText(img, f'TTC: {ttc:.2f} seconds', (x1, y1 - 30),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, myColor, 2)
+                        cv2.putText(img, f'Collision Risk: {collision_risk}', (x1, y1 - 50),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, myColor, 2)
+
+        # Display annotated image
+        cv2.imshow('Image', img)
+        cv2.waitKey(0)  # Wait for a key press to display the next image
+
+    # Close all OpenCV windows
+    cv2.destroyAllWindows()
+
+# Ask user for input type
+input_type = input("Enter 'video' to process a video file or 'image' to process a directory of images: ")
+
+if input_type.lower() == 'video':
+    video_path = input("Enter the path to the video file (/Users/aflubasheer/Pictures/videos/c87f90817a1b46bc876784e64e9ba0ec.mp4): ")
+    process_video(video_path)
+
+elif input_type.lower() == 'image':
+    image_directory = input("Enter the path to the directory containing images (/Users/aflubasheer/Pictures/images/): ")
+    process_images(image_directory)
+
+else:
+    print("Invalid input type. Please enter 'video' or 'image'.")
